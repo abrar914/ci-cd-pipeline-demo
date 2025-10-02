@@ -1,0 +1,69 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:            # manual button in Actions tab
+    inputs:
+      ref:
+        description: "Git ref to deploy (branch, tag, or SHA)"
+        required: false
+        default: "main"
+  # Optional: auto-deploy when you publish a GitHub Release
+  # release:
+  #   types: [published]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production     # lets you require approvals in Settings → Environments
+
+    steps:
+      - name: Checkout (for metadata only)
+        uses: actions/checkout@v4
+
+      - name: Write SSH key from secret
+        run: |
+          mkdir -p ~/.ssh
+          umask 077
+          cat > ~/.ssh/prodserver.pem << 'EOF'
+          ${{ secrets.EC2_SSH_KEY_PROD }}
+          EOF
+          chmod 600 ~/.ssh/prodserver.pem
+
+      - name: Determine ref to deploy
+        id: pickref
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "ref=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ inputs.ref }}" >> $GITHUB_OUTPUT
+          fi
+          echo "Chosen ref: $(cat $GITHUB_OUTPUT)"
+
+      - name: Test SSH connectivity (verbose)
+        run: |
+          ssh -vvv -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "echo connected OK"
+
+      - name: Deploy to EC2 Production (uses ~/deploy.sh on server)
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "bash ~/deploy.sh"
+
+      # --- Optional: deploy an exact ref instead of whatever ~/deploy.sh pulls ---
+      # - name: Deploy exact ref to EC2 Production
+      #   env:
+      #     DEPLOY_REF: ${{ steps.pickref.outputs.ref }}
+      #   run: |
+      #     ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} bash -lc '
+      #       set -e
+      #       APP_DIR="$HOME/ci-cd-pipeline-demo"
+      #       if [ ! -d "$APP_DIR" ]; then git clone https://github.com/abrar914/ci-cd-pipeline-demo.git "$APP_DIR"; fi
+      #       cd "$APP_DIR"
+      #       git fetch --all --tags
+      #       git checkout -f "${DEPLOY_REF:-main}"
+      #       python3 -m pip install --upgrade pip
+      #       pip3 install -r requirements.txt
+      #       pkill -f app.py || true
+      #       nohup python3 app.py > app.log 2>&1 &
+      #       sleep 1
+      #       curl -sI http://127.0.0.1:8000 | head -n1 || true
+      #     '
+
