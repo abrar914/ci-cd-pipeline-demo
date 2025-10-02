@@ -2,8 +2,7 @@ name: Deploy to Test Server
 
 on:
   push:
-    branches:
-      - main   # runs only when you push to main
+    branches: [ "main" ]
 
 jobs:
   deploy:
@@ -11,16 +10,24 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Set up SSH key
+      - name: Write SSH key from secret
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY_TEST }}" > ~/.ssh/testserver.pem
+          umask 077
+          cat > ~/.ssh/testserver.pem << 'EOF'
+          ${{ secrets.EC2_SSH_KEY_TEST }}
+          EOF
           chmod 600 ~/.ssh/testserver.pem
+
+      - name: Test SSH connectivity (verbose)
+        run: |
+          ssh -vvv -o StrictHostKeyChecking=no -i ~/.ssh/testserver.pem ubuntu@${{ secrets.EC2_TEST_IP }} "echo connected OK"
 
       - name: Deploy to EC2 Test Server
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/testserver.pem ubuntu@${{ secrets.EC2_TEST_IP }} "bash ~/deploy.sh"
+
 
 
