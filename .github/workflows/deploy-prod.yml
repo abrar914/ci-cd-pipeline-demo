@@ -20,24 +20,26 @@ jobs:
       - name: Deploy to EC2 Production Server
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "
-            set -e
-            if [ ! -d ~/ci-cd-pipeline-demo ]; then
-              git clone https://github.com/abrar914/ci-cd-pipeline-demo.git ~/ci-cd-pipeline-demo
-            fi
+            # Ensure app folder exists
+            cd ~/ci-cd-pipeline-demo || git clone https://github.com/abrar914/ci-cd-pipeline-demo.git ~/ci-cd-pipeline-demo
             cd ~/ci-cd-pipeline-demo
-            git fetch origin
-            git reset --hard origin/main
+
+            # Pull latest code
+            git pull origin main
+
+            # Install/upgrade dependencies
             python3 -m pip install --upgrade pip --user
             pip3 install -r requirements.txt --user
+
+            # Restart app
             pkill -f app.py || true
             nohup python3 app.py > app.log 2>&1 &
-            sleep 1
+
+            # Quick health check
+            sleep 2
             curl -sI http://127.0.0.1:8000 | head -n1 || true
           "
 
-      - name: Health check production app
-        run: |
-          curl -sI http://${{ secrets.EC2_PROD_IP }}:8000 | head -n1
 
 
 
