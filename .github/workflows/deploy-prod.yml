@@ -1,50 +1,25 @@
-name: Deploy to Production
+name: Deploy to Production Server
 
 on:
-  # Manual trigger from Actions tab
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: "Git ref (branch, tag, or SHA) to deploy"
-        required: false
-        default: "main"
+  workflow_dispatch:   # manual trigger only
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
 
     steps:
-      - name: Checkout (metadata only)
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Write SSH key from secret (newline-safe)
+      - name: Set up SSH key (reuse test key for prod)
         run: |
           mkdir -p ~/.ssh
-          umask 077
-          cat > ~/.ssh/prodserver.pem << 'EOF'
-          ${{ secrets.EC2_SSH_KEY_PROD }}
-          EOF
+          echo "${{ secrets.EC2_SSH_KEY_TEST }}" > ~/.ssh/prodserver.pem
           chmod 600 ~/.ssh/prodserver.pem
 
-      - name: Determine ref to deploy
-        id: pickref
+      - name: Deploy to EC2 Production Server
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "ref=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "ref=${{ inputs.ref || 'main' }}" >> $GITHUB_OUTPUT
-          fi
-          echo "Deploying ref: $(cat $GITHUB_OUTPUT)"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "bash ~/deploy.sh"
 
-      - name: Test SSH connectivity
-        run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem \
-            ubuntu@${{ secrets.EC2_PROD_IP }} "echo '✅ SSH to prod works'"
-
-      - name: Deploy to EC2 Production
-        run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem \
-            ubuntu@${{ secrets.EC2_PROD_IP }} "bash ~/deploy.sh"
 
 
