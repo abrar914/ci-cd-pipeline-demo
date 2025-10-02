@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout code (metadata only)
         uses: actions/checkout@v3
 
       - name: Set up SSH key (reuse test key for prod)
@@ -17,28 +17,45 @@ jobs:
           echo "${{ secrets.EC2_SSH_KEY_TEST }}" > ~/.ssh/prodserver.pem
           chmod 600 ~/.ssh/prodserver.pem
 
-      - name: Deploy to EC2 Production Server
+      - name: Deploy to EC2 Production Server (heredoc script)
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "
-            # Ensure app folder exists
-            cd ~/ci-cd-pipeline-demo || git clone https://github.com/abrar914/ci-cd-pipeline-demo.git ~/ci-cd-pipeline-demo
-            cd ~/ci-cd-pipeline-demo
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} 'bash -s' <<'EOSH'
+          set -euo pipefail
 
-            # Pull latest code
-            git pull origin main
+          # Ensure repo exists
+          if [ ! -d "$HOME/ci-cd-pipeline-demo" ]; then
+            git clone https://github.com/abrar914/ci-cd-pipeline-demo.git "$HOME/ci-cd-pipeline-demo"
+          fi
 
-            # Install/upgrade dependencies
-            python3 -m pip install --upgrade pip --user
-            pip3 install -r requirements.txt --user
+          cd "$HOME/ci-cd-pipeline-demo"
 
-            # Restart app
-            pkill -f app.py || true
-            nohup python3 app.py > app.log 2>&1 &
+          # Pull latest code
+          git fetch origin
+          git reset --hard origin/main
 
-            # Quick health check
-            sleep 2
-            curl -sI http://127.0.0.1:8000 | head -n1 || true
-          "
+          # Install deps (user site to avoid sudo)
+          python3 -m pip install --upgrade pip --user
+          pip3 install -r requirements.txt --user
+
+          # Restart app
+          pkill -f app.py || true
+          nohup python3 app.py > app.log 2>&1 &
+
+          # Local health check
+          sleep 2
+          if ! curl -sI http://127.0.0.1:8000 | head -n1 | grep -q "200"; then
+            echo "Health check failed. app.log tail:"
+            tail -n 100 app.log || true
+            exit 1
+          fi
+
+          echo "Deployed OK"
+          EOSH
+
+      - name: External health check (from runner to EC2)
+        run: |
+          curl -sI http://${{ secrets.EC2_PROD_IP }}:8000 | head -n1 || true
+
 
 
 
