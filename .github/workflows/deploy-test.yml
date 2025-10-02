@@ -2,7 +2,8 @@ name: Deploy to Test Server
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main   # Run only on pushes to main
 
 jobs:
   deploy:
@@ -12,7 +13,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Write SSH key from secret
+      - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
           umask 077
@@ -21,13 +22,15 @@ jobs:
           EOF
           chmod 600 ~/.ssh/testserver.pem
 
-      - name: Test SSH connectivity (verbose)
+      - name: Test SSH connectivity
         run: |
-          ssh -vvv -o StrictHostKeyChecking=no -i ~/.ssh/testserver.pem ubuntu@${{ secrets.EC2_TEST_IP }} "echo connected OK"
+          echo "Testing SSH to ${{ secrets.EC2_TEST_IP }}"
+          ssh -vvv -o StrictHostKeyChecking=no -i ~/.ssh/testserver.pem ubuntu@${{ secrets.EC2_TEST_IP }} "echo Connected OK"
 
       - name: Deploy to EC2 Test Server
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/testserver.pem ubuntu@${{ secrets.EC2_TEST_IP }} "bash ~/deploy.sh"
+
 
 
 
