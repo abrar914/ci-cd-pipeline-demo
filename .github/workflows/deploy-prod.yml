@@ -1,21 +1,18 @@
 name: Deploy to Production
 
 on:
-  # Run manually from the Actions tab
+  # Manual trigger from Actions tab
   workflow_dispatch:
     inputs:
       ref:
         description: "Git ref (branch, tag, or SHA) to deploy"
         required: false
         default: "main"
-  # Uncomment if you also want release-based deploys
-  # release:
-  #   types: [published]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production   # optional: protect with required reviewers in Settings → Environments
+    environment: production
 
     steps:
       - name: Checkout (metadata only)
@@ -40,35 +37,14 @@ jobs:
           fi
           echo "Deploying ref: $(cat $GITHUB_OUTPUT)"
 
-      - name: Test SSH connectivity (verbose)
+      - name: Test SSH connectivity
         run: |
-          ssh -vvv -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem \
-            ubuntu@${{ secrets.EC2_PROD_IP }} "echo connected OK"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem \
+            ubuntu@${{ secrets.EC2_PROD_IP }} "echo '✅ SSH to prod works'"
 
-      - name: Deploy to EC2 Production (uses ~/deploy.sh on server)
+      - name: Deploy to EC2 Production
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem \
             ubuntu@${{ secrets.EC2_PROD_IP }} "bash ~/deploy.sh"
 
-      # ── Alternative: deploy an exact ref/tag instead of what deploy.sh pulls ──
-      # - name: Deploy exact ref to EC2 Production
-      #   env:
-      #     DEPLOY_REF: ${{ steps.pickref.outputs.ref }}
-      #   run: |
-      #     ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} bash -lc '
-      #       set -e
-      #       APP_DIR="$HOME/ci-cd-pipeline-demo"
-      #       if [ ! -d "$APP_DIR" ]; then
-      #         git clone https://github.com/abrar914/ci-cd-pipeline-demo.git "$APP_DIR"
-      #       fi
-      #       cd "$APP_DIR"
-      #       git fetch --all --tags
-      #       git checkout -f "${DEPLOY_REF:-main}"
-      #       python3 -m pip install --upgrade pip
-      #       pip3 install -r requirements.txt
-      #       pkill -f app.py || true
-      #       nohup python3 app.py > app.log 2>&1 &
-      #       sleep 1
-      #       curl -sI http://127.0.0.1:8000 | head -n1 || true
-      #     '
 
