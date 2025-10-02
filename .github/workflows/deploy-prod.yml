@@ -1,7 +1,7 @@
 name: Deploy to Production Server
 
 on:
-  workflow_dispatch:   # manual trigger only
+  workflow_dispatch:   # Manual trigger from GitHub Actions
 
 jobs:
   deploy:
@@ -11,15 +11,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up SSH key (reuse test key for prod)
+      - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY_TEST }}" > ~/.ssh/prodserver.pem
+          echo "${{ secrets.EC2_SSH_KEY_PROD }}" > ~/.ssh/prodserver.pem
           chmod 600 ~/.ssh/prodserver.pem
 
       - name: Deploy to EC2 Production Server
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "bash ~/deploy.sh"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "
+            cd ~/ci-cd-pipeline-demo &&
+            git pull origin main &&
+            chmod +x ~/deploy.sh &&
+            bash ~/deploy.sh
+          "
+
 
 
 
