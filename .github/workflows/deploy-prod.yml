@@ -1,26 +1,27 @@
 name: Deploy to Production
 
 on:
-  workflow_dispatch:            # manual button in Actions tab
+  # Run manually from the Actions tab
+  workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref to deploy (branch, tag, or SHA)"
+        description: "Git ref (branch, tag, or SHA) to deploy"
         required: false
         default: "main"
-  # Optional: auto-deploy when you publish a GitHub Release
+  # Uncomment if you also want release-based deploys
   # release:
   #   types: [published]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production     # lets you require approvals in Settings → Environments
+    environment: production   # optional: protect with required reviewers in Settings → Environments
 
     steps:
-      - name: Checkout (for metadata only)
+      - name: Checkout (metadata only)
         uses: actions/checkout@v4
 
-      - name: Write SSH key from secret
+      - name: Write SSH key from secret (newline-safe)
         run: |
           mkdir -p ~/.ssh
           umask 077
@@ -35,19 +36,21 @@ jobs:
           if [ "${{ github.event_name }}" = "release" ]; then
             echo "ref=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
           else
-            echo "ref=${{ inputs.ref }}" >> $GITHUB_OUTPUT
+            echo "ref=${{ inputs.ref || 'main' }}" >> $GITHUB_OUTPUT
           fi
-          echo "Chosen ref: $(cat $GITHUB_OUTPUT)"
+          echo "Deploying ref: $(cat $GITHUB_OUTPUT)"
 
       - name: Test SSH connectivity (verbose)
         run: |
-          ssh -vvv -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "echo connected OK"
+          ssh -vvv -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem \
+            ubuntu@${{ secrets.EC2_PROD_IP }} "echo connected OK"
 
       - name: Deploy to EC2 Production (uses ~/deploy.sh on server)
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} "bash ~/deploy.sh"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem \
+            ubuntu@${{ secrets.EC2_PROD_IP }} "bash ~/deploy.sh"
 
-      # --- Optional: deploy an exact ref instead of whatever ~/deploy.sh pulls ---
+      # ── Alternative: deploy an exact ref/tag instead of what deploy.sh pulls ──
       # - name: Deploy exact ref to EC2 Production
       #   env:
       #     DEPLOY_REF: ${{ steps.pickref.outputs.ref }}
@@ -55,7 +58,9 @@ jobs:
       #     ssh -o StrictHostKeyChecking=no -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} bash -lc '
       #       set -e
       #       APP_DIR="$HOME/ci-cd-pipeline-demo"
-      #       if [ ! -d "$APP_DIR" ]; then git clone https://github.com/abrar914/ci-cd-pipeline-demo.git "$APP_DIR"; fi
+      #       if [ ! -d "$APP_DIR" ]; then
+      #         git clone https://github.com/abrar914/ci-cd-pipeline-demo.git "$APP_DIR"
+      #       fi
       #       cd "$APP_DIR"
       #       git fetch --all --tags
       #       git checkout -f "${DEPLOY_REF:-main}"
