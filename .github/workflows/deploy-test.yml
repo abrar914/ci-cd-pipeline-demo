@@ -3,7 +3,7 @@ name: Deploy to Test Server
 on:
   push:
     branches:
-      - main  
+      - main    
 
 jobs:
   deploy:
@@ -13,23 +13,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install Local Dependencies for CI Checks
+        run: |
+          echo "Installing dependencies required for any local CI checks..."
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
           umask 077
-          # Use the correct secret name for the test server key
           cat > ~/.ssh/testserver.pem << 'EOF'
           ${{ secrets.EC2_SSH_KEY_TEST }}
           EOF
           chmod 600 ~/.ssh/testserver.pem
 
+      # Fix permissions before copying files
+      - name: Pre-Deployment Cleanup (Fix Permissions)
+        run: |
+          echo "Fixing file ownership on target directory..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i ~/.ssh/testserver.pem \
+              ubuntu@${{ secrets.EC2_TEST_IP }} "sudo chown -R ubuntu:ubuntu ~/ci-cd-pipeline-demo || true"
+          # '|| true' handles the case where the directory might not exist yet.
+          
       - name: Copy Files to EC2 Test Server
         run: |
           # Use SCP to copy the entire repository to the server
-          # -o StrictHostKeyChecking=no and -o UserKnownHostsFile=/dev/null fix the host key error
-          # -r copies the directory recursively
-          # . is the source (local repo root)
-          # ubuntu@...:~/ci-cd-pipeline-demo is the destination path on the server
           scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r \
               -i ~/.ssh/testserver.pem \
               . ubuntu@${{ secrets.EC2_TEST_IP }}:~/ci-cd-pipeline-demo
@@ -43,8 +53,6 @@ jobs:
       - name: Execute Deployment Script on Test Server
         run: |
           echo "Executing deployment script on ${{ secrets.EC2_TEST_IP }}"
-          # Execute the deploy.sh script that was just copied
-          # Install dependencies and run the app
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -i ~/.ssh/testserver.pem \
               ubuntu@${{ secrets.EC2_TEST_IP }} "~/ci-cd-pipeline-demo/deploy.sh"
