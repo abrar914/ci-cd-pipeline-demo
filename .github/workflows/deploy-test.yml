@@ -1,78 +1,50 @@
-name: Deploy to Production Server
+name: Deploy to Test Server
 
 on:
-  workflow_dispatch: 
+  push:
+    branches:
+      - main  
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code (metadata only)
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-        uses: actions/checkout@v3
-
-      - name: Set up SSH key (reuse test key for prod)
+      - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
-          # Fix: Add UserKnownHostsFile=/dev/null to fully bypass host key check
-          echo "${{ secrets.EC2_SSH_KEY_TEST }}" > ~/.ssh/prodserver.pem
-          chmod 600 ~/.ssh/prodserver.pem
+          umask 077
+          # Use the correct secret name for the test server key
+          cat > ~/.ssh/testserver.pem << 'EOF'
+          ${{ secrets.EC2_SSH_KEY_TEST }}
+          EOF
+          chmod 600 ~/.ssh/testserver.pem
 
-      - name: Deploy to EC2 Production Server (heredoc script)
+      - name: Copy Files to EC2 Test Server
         run: |
-          # 💥 FIX: Add UserKnownHostsFile=/dev/null to the SSH command for reliability
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} 'bash -s' <<'EOSH'
-          set -euo pipefail
-
-          APP_DIR="$HOME/ci-cd-pipeline-demo"
-          VENV_DIR="$APP_DIR/venv" # Define VENV directory
-
-          # 1. Ensure repo exists and pull latest code
-          if [ ! -d "$APP_DIR" ]; then
-            git clone https://github.com/abrar914/ci-cd-pipeline-demo.git "$APP_DIR"
-          fi
-
-          cd "$APP_DIR"
-          git fetch origin
-          git reset --hard origin/main
-
-          # 2. 💥 CRITICAL FIX: Setup and use Virtual Environment
-          # Create VENV if it doesn't exist
-          if [ ! -d "$VENV_DIR" ]; then
-              python3 -m venv "$VENV_DIR"
-          fi
+          # Use SCP to copy the entire repository to the server
+          # -o StrictHostKeyChecking=no and -o UserKnownHostsFile=/dev/null fix the host key error
+          # -r copies the directory recursively
+          # . is the source (local repo root)
+          # ubuntu@...:~/ci-cd-pipeline-demo is the destination path on the server
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r \
+              -i ~/.ssh/testserver.pem \
+              . ubuntu@${{ secrets.EC2_TEST_IP }}:~/ci-cd-pipeline-demo
           
-          # Activate the VENV - all subsequent python/pip commands use the VENV
-          source "$VENV_DIR/bin/activate"
+          # Ensure the deploy script is executable on the server
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i ~/.ssh/testserver.pem \
+              ubuntu@${{ secrets.EC2_TEST_IP }} "chmod +x ~/ci-cd-pipeline-demo/deploy.sh"
 
-          # 3. Install dependencies into the VENV
-          echo "Installing dependencies into virtual environment..."
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          
-          # 4. Restart app
-          # pkill is now targeting the VENV's python instance
-          pkill -f app.py || true 
 
-          echo "Starting app..."
-          # Use the VENV's python interpreter to run the app
-          nohup python3 app.py > app.log 2>&1 &
-
-          # 5. Deactivate VENV after deployment script finishes
-          deactivate
-
-          # 6. Local health check
-          sleep 2
-          if ! curl -sI http://127.0.0.1:8000 | head -n1 | grep -q "200"; then
-            echo "Health check failed. app.log tail:"
-            tail -n 100 app.log || true
-            exit 1
-          fi
-
-          echo "Deployed OK"
-          EOSH
-
-      - name: External health check (from runner to EC2)
+      - name: Execute Deployment Script on Test Server
         run: |
-          curl -sI http://${{ secrets.EC2_PROD_IP }}:8000 | head -n1 || true
+          echo "Executing deployment script on ${{ secrets.EC2_TEST_IP }}"
+          # Execute the deploy.sh script that was just copied
+          # Install dependencies and run the app
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i ~/.ssh/testserver.pem \
+              ubuntu@${{ secrets.EC2_TEST_IP }} "~/ci-cd-pipeline-demo/deploy.sh"
