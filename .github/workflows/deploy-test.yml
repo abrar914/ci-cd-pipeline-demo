@@ -3,7 +3,7 @@ name: Deploy to Test Server
 on:
   push:
     branches:
-      - main    
+      - main  
 
 jobs:
   deploy:
@@ -17,12 +17,14 @@ jobs:
         run: |
           echo "Installing dependencies required for any local CI checks..."
           python -m pip install --upgrade pip
+          # Installs flask, prometheus-client, etc., into the runner's environment
           pip install -r requirements.txt
 
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
           umask 077
+          # Use the correct secret name for the test server key
           cat > ~/.ssh/testserver.pem << 'EOF'
           ${{ secrets.EC2_SSH_KEY_TEST }}
           EOF
@@ -36,12 +38,17 @@ jobs:
               -i ~/.ssh/testserver.pem \
               ubuntu@${{ secrets.EC2_TEST_IP }} "sudo chown -R ubuntu:ubuntu ~/ci-cd-pipeline-demo || true"
           # '|| true' handles the case where the directory might not exist yet.
-          
-      - name: Copy Files to EC2 Test Server
+
+      - name: Copy Files to EC2 Test Server (Using rsync to exclude .git)
         run: |
-          # Use SCP to copy the entire repository to the server
-          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r \
-              -i ~/.ssh/testserver.pem \
+          echo "Copying files via rsync, excluding the problematic .git directory..."
+          # FIX: rsync is used instead of scp.
+          # -a: archive mode (preserves permissions, etc.)
+          # -v: verbose (helpful for debugging)
+          # -z: compress file data during transfer
+          # --exclude '.git': tells rsync to skip the entire .git folder
+          # -e: specifies the remote shell to use (ssh) and includes all necessary SSH options.
+          rsync -avz --exclude '.git' -e "ssh -i ~/.ssh/testserver.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
               . ubuntu@${{ secrets.EC2_TEST_IP }}:~/ci-cd-pipeline-demo
           
           # Ensure the deploy script is executable on the server
@@ -53,6 +60,8 @@ jobs:
       - name: Execute Deployment Script on Test Server
         run: |
           echo "Executing deployment script on ${{ secrets.EC2_TEST_IP }}"
+          # Execute the deploy.sh script that was just copied
+          # Install dependencies and run the app
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -i ~/.ssh/testserver.pem \
               ubuntu@${{ secrets.EC2_TEST_IP }} "~/ci-cd-pipeline-demo/deploy.sh"
