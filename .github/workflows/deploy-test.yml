@@ -1,36 +1,78 @@
-name: Deploy to Test Server
+name: Deploy to Production Server
 
 on:
-  push:
-    branches:
-      - main   # Run only on pushes to main
+  workflow_dispatch: 
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout code (metadata only)
 
-      - name: Set up SSH key
+        uses: actions/checkout@v3
+
+      - name: Set up SSH key (reuse test key for prod)
         run: |
           mkdir -p ~/.ssh
-          umask 077
-          cat > ~/.ssh/testserver.pem << 'EOF'
-          ${{ secrets.EC2_SSH_KEY_TEST }}
-          EOF
-          chmod 600 ~/.ssh/testserver.pem
+          # Fix: Add UserKnownHostsFile=/dev/null to fully bypass host key check
+          echo "${{ secrets.EC2_SSH_KEY_TEST }}" > ~/.ssh/prodserver.pem
+          chmod 600 ~/.ssh/prodserver.pem
 
-      - name: Test SSH connectivity
+      - name: Deploy to EC2 Production Server (heredoc script)
         run: |
-          echo "Testing SSH to ${{ secrets.EC2_TEST_IP }}"
-          ssh -vvv -o StrictHostKeyChecking=no -i ~/.ssh/testserver.pem ubuntu@${{ secrets.EC2_TEST_IP }} "echo Connected OK"
+          # 💥 FIX: Add UserKnownHostsFile=/dev/null to the SSH command for reliability
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/prodserver.pem ubuntu@${{ secrets.EC2_PROD_IP }} 'bash -s' <<'EOSH'
+          set -euo pipefail
 
-      - name: Deploy to EC2 Test Server
+          APP_DIR="$HOME/ci-cd-pipeline-demo"
+          VENV_DIR="$APP_DIR/venv" # Define VENV directory
+
+          # 1. Ensure repo exists and pull latest code
+          if [ ! -d "$APP_DIR" ]; then
+            git clone https://github.com/abrar914/ci-cd-pipeline-demo.git "$APP_DIR"
+          fi
+
+          cd "$APP_DIR"
+          git fetch origin
+          git reset --hard origin/main
+
+          # 2. 💥 CRITICAL FIX: Setup and use Virtual Environment
+          # Create VENV if it doesn't exist
+          if [ ! -d "$VENV_DIR" ]; then
+              python3 -m venv "$VENV_DIR"
+          fi
+          
+          # Activate the VENV - all subsequent python/pip commands use the VENV
+          source "$VENV_DIR/bin/activate"
+
+          # 3. Install dependencies into the VENV
+          echo "Installing dependencies into virtual environment..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          
+          # 4. Restart app
+          # pkill is now targeting the VENV's python instance
+          pkill -f app.py || true 
+
+          echo "Starting app..."
+          # Use the VENV's python interpreter to run the app
+          nohup python3 app.py > app.log 2>&1 &
+
+          # 5. Deactivate VENV after deployment script finishes
+          deactivate
+
+          # 6. Local health check
+          sleep 2
+          if ! curl -sI http://127.0.0.1:8000 | head -n1 | grep -q "200"; then
+            echo "Health check failed. app.log tail:"
+            tail -n 100 app.log || true
+            exit 1
+          fi
+
+          echo "Deployed OK"
+          EOSH
+
+      - name: External health check (from runner to EC2)
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/testserver.pem ubuntu@${{ secrets.EC2_TEST_IP }} "bash ~/deploy.sh"
-
-
-
-
+          curl -sI http://${{ secrets.EC2_PROD_IP }}:8000 | head -n1 || true
