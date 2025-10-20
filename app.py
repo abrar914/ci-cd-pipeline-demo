@@ -39,6 +39,13 @@ def metrics():
     # Return the metrics data
     return Response(generate_latest(), mimetype='text/plain')
 
+# --- Health check route for Load Balancer ---
+@app.route('/health')
+def health():
+    return Response('{"status": "ok"}', mimetype='application/json'), 200
+# --------------------------------------------
+
+
 if __name__ == '__main__':
     # Running on port 8000 as per Level 1 setup
     app.run(host='0.0.0.0', port=8000)
