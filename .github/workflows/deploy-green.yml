@@ -7,16 +7,14 @@ on:
 
 permissions:
   contents: read
-  id-token: write    # harmless if you use static secrets
+  id-token: write
 
 env:
   AWS_REGION: ap-southeast-2
   LAUNCH_TEMPLATE_NAME: wp-lt
   GREEN_ASG: wp-asg-green
-  BLUE_ASG: wp-asg
   ALB_NAME: wp-alb
   TG_GREEN_NAME: TG-Green
-  TG_BLUE_NAME: TG-Blue
   HEALTH_PATH: /health
   HEALTH_PORT: "8000"
 
@@ -24,10 +22,9 @@ jobs:
   deploy-green:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # Authenticate (uses the two repo secrets)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -35,10 +32,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install jq
-        run: sudo apt-get update -y && sudo apt-get install -y jq
+      - name: Install tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
-      - name: Build user-data (pins current commit)
+      - name: Build user-data (pin to this commit)
         run: |
           echo "COMMIT_SHA=${GITHUB_SHA}" | tee -a $GITHUB_ENV
           cat > user-data.sh <<'UD'
@@ -76,54 +75,62 @@ jobs:
           systemctl enable flask
           systemctl restart flask
           UD
+          # Base64 (macOS compat switches not needed in GitHub Ubuntu)
           BASE64_UD="$(base64 -w0 < user-data.sh || base64 < user-data.sh)"
           echo "BASE64_UD=$BASE64_UD" | tee -a $GITHUB_ENV
 
-      - name: Create new Launch Template version (override user-data)
-        id: newlt
+      - name: Create Launch Template version (override userData)
         run: |
           LATEST=$(aws ec2 describe-launch-templates \
             --launch-template-names "${LAUNCH_TEMPLATE_NAME}" \
             --query 'LaunchTemplates[0].LatestVersionNumber' --output text)
+          echo "Latest LT version: $LATEST"
           OUT=$(aws ec2 create-launch-template-version \
             --launch-template-name "${LAUNCH_TEMPLATE_NAME}" \
             --source-version "$LATEST" \
             --launch-template-data "{\"UserData\":\"${BASE64_UD}\"}")
           echo "$OUT" | jq -r '.LaunchTemplateVersion | {VersionNumber,LaunchTemplateId}'
-          echo "NEW_VER=$(echo "$OUT" | jq -r '.LaunchTemplateVersion.VersionNumber')" | tee -a $GITHUB_ENV
+          NEW_VER=$(echo "$OUT" | jq -r '.LaunchTemplateVersion.VersionNumber')
+          echo "NEW_VER=$NEW_VER" | tee -a $GITHUB_ENV
 
-      - name: Point Green ASG to new template version
+      - name: Update Green ASG to new LT version
         run: |
           aws autoscaling update-auto-scaling-group \
             --auto-scaling-group-name "${GREEN_ASG}" \
             --launch-template "LaunchTemplateName=${LAUNCH_TEMPLATE_NAME},Version=${NEW_VER}"
 
       - name: Start instance refresh (Green)
-        run: aws autoscaling start-instance-refresh --auto-scaling-group-name "${GREEN_ASG}" --strategy Rolling
+        run: |
+          aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name "${GREEN_ASG}" --strategy Rolling
 
       - name: Wait for instance refresh to complete
         timeout-minutes: 30
         run: |
           while true; do
-            S=$(aws autoscaling describe-instance-refreshes \
+            ST=$(aws autoscaling describe-instance-refreshes \
               --auto-scaling-group-name "${GREEN_ASG}" \
               --query 'InstanceRefreshes[0].Status' --output text)
-            echo "Refresh: $S"
-            [ "$S" = "Successful" ] && break
-            [ "$S" = "Failed" -o "$S" = "Cancelled" ] && exit 1
+            echo "Instance refresh: $ST"
+            case "$ST" in
+              Successful) break ;;
+              Failed|Cancelled) echo "Instance refresh failed"; exit 1 ;;
+            esac
             sleep 20
           done
 
-      - name: Resolve TG-Green ARN
+      - name: Get TG-Green ARN
         run: |
-          echo "TG_GREEN_ARN=$(aws elbv2 describe-target-groups --names "${TG_GREEN_NAME}" --query 'TargetGroups[0].TargetGroupArn' --output text)" | tee -a $GITHUB_ENV
+          TG_GREEN_ARN=$(aws elbv2 describe-target-groups --names "${TG_GREEN_NAME}" \
+            --query 'TargetGroups[0].TargetGroupArn' --output text)
+          echo "TG_GREEN_ARN=$TG_GREEN_ARN" | tee -a $GITHUB_ENV
 
-      - name: Wait for TG-Green targets to be healthy
+      - name: Wait for TG-Green healthy
         timeout-minutes: 10
         run: |
-          TG="$TG_GREEN_ARN"
           for i in $(seq 1 60); do
-            STATES=$(aws elbv2 describe-target-health --target-group-arn "$TG" --query 'TargetHealthDescriptions[].TargetHealth.State' --output text || true)
+            STATES=$(aws elbv2 describe-target-health --target-group-arn "$TG_GREEN_ARN" \
+              --query 'TargetHealthDescriptions[].TargetHealth.State' --output text || true)
             echo "States: $STATES"
             if [ -n "$STATES" ] && ! echo "$STATES" | grep -qv healthy; then
               echo "All healthy"; exit 0
@@ -134,10 +141,13 @@ jobs:
 
       - name: Switch ALB default to TG-Green
         run: |
-          ALB_ARN=$(aws elbv2 describe-load-balancers --names "${ALB_NAME}" --query 'LoadBalancers[0].LoadBalancerArn' --output text)
-          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" --query 'Listeners[?Port==`80`]|[0].ListenerArn' --output text)
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names "${ALB_NAME}" \
+            --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+            --query 'Listeners[?Port==`80`]|[0].ListenerArn' --output text)
+          echo "Listener: $LISTENER_ARN"
           aws elbv2 modify-listener --listener-arn "$LISTENER_ARN" \
             --default-actions Type=forward,TargetGroupArn="$TG_GREEN_ARN"
 
       - name: Summary
-        run: echo "Deployed ${GITHUB_SHA::7} to GREEN via LT ${NEW_VER} and flipped ALB."
+        run: echo "Deployed ${GITHUB_SHA::7} -> GREEN via LT ${NEW_VER} and flipped ALB."
