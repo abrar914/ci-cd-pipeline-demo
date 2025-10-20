@@ -1,0 +1,143 @@
+name: Deploy to Green (Blue-Green)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write    # harmless if you use static secrets
+
+env:
+  AWS_REGION: ap-southeast-2
+  LAUNCH_TEMPLATE_NAME: wp-lt
+  GREEN_ASG: wp-asg-green
+  BLUE_ASG: wp-asg
+  ALB_NAME: wp-alb
+  TG_GREEN_NAME: TG-Green
+  TG_BLUE_NAME: TG-Blue
+  HEALTH_PATH: /health
+  HEALTH_PORT: "8000"
+
+jobs:
+  deploy-green:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Authenticate (uses the two repo secrets)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install jq
+        run: sudo apt-get update -y && sudo apt-get install -y jq
+
+      - name: Build user-data (pins current commit)
+        run: |
+          echo "COMMIT_SHA=${GITHUB_SHA}" | tee -a $GITHUB_ENV
+          cat > user-data.sh <<'UD'
+          #!/bin/bash
+          set -euo pipefail
+          if command -v dnf >/dev/null 2>&1; then
+            dnf -y update || true
+            dnf -y install python3-pip git
+          elif command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y
+            apt-get install -y python3-pip git
+          fi
+          APP_DIR=/home/ec2-user/ci-cd-pipeline-demo
+          mkdir -p /home/ec2-user
+          if [ ! -d "$APP_DIR" ]; then
+            git clone https://github.com/abrar914/ci-cd-pipeline-demo.git "$APP_DIR"
+          fi
+          cd "$APP_DIR"
+          git fetch --all
+          git checkout ${GITHUB_SHA}
+          pip3 install -r requirements.txt
+          cat >/etc/systemd/system/flask.service <<'EOF'
+          [Unit]
+          Description=Flask CI/CD App
+          After=network.target
+          [Service]
+          User=ec2-user
+          WorkingDirectory=/home/ec2-user/ci-cd-pipeline-demo
+          ExecStart=/usr/bin/python3 app.py
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable flask
+          systemctl restart flask
+          UD
+          BASE64_UD="$(base64 -w0 < user-data.sh || base64 < user-data.sh)"
+          echo "BASE64_UD=$BASE64_UD" | tee -a $GITHUB_ENV
+
+      - name: Create new Launch Template version (override user-data)
+        id: newlt
+        run: |
+          LATEST=$(aws ec2 describe-launch-templates \
+            --launch-template-names "${LAUNCH_TEMPLATE_NAME}" \
+            --query 'LaunchTemplates[0].LatestVersionNumber' --output text)
+          OUT=$(aws ec2 create-launch-template-version \
+            --launch-template-name "${LAUNCH_TEMPLATE_NAME}" \
+            --source-version "$LATEST" \
+            --launch-template-data "{\"UserData\":\"${BASE64_UD}\"}")
+          echo "$OUT" | jq -r '.LaunchTemplateVersion | {VersionNumber,LaunchTemplateId}'
+          echo "NEW_VER=$(echo "$OUT" | jq -r '.LaunchTemplateVersion.VersionNumber')" | tee -a $GITHUB_ENV
+
+      - name: Point Green ASG to new template version
+        run: |
+          aws autoscaling update-auto-scaling-group \
+            --auto-scaling-group-name "${GREEN_ASG}" \
+            --launch-template "LaunchTemplateName=${LAUNCH_TEMPLATE_NAME},Version=${NEW_VER}"
+
+      - name: Start instance refresh (Green)
+        run: aws autoscaling start-instance-refresh --auto-scaling-group-name "${GREEN_ASG}" --strategy Rolling
+
+      - name: Wait for instance refresh to complete
+        timeout-minutes: 30
+        run: |
+          while true; do
+            S=$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "${GREEN_ASG}" \
+              --query 'InstanceRefreshes[0].Status' --output text)
+            echo "Refresh: $S"
+            [ "$S" = "Successful" ] && break
+            [ "$S" = "Failed" -o "$S" = "Cancelled" ] && exit 1
+            sleep 20
+          done
+
+      - name: Resolve TG-Green ARN
+        run: |
+          echo "TG_GREEN_ARN=$(aws elbv2 describe-target-groups --names "${TG_GREEN_NAME}" --query 'TargetGroups[0].TargetGroupArn' --output text)" | tee -a $GITHUB_ENV
+
+      - name: Wait for TG-Green targets to be healthy
+        timeout-minutes: 10
+        run: |
+          TG="$TG_GREEN_ARN"
+          for i in $(seq 1 60); do
+            STATES=$(aws elbv2 describe-target-health --target-group-arn "$TG" --query 'TargetHealthDescriptions[].TargetHealth.State' --output text || true)
+            echo "States: $STATES"
+            if [ -n "$STATES" ] && ! echo "$STATES" | grep -qv healthy; then
+              echo "All healthy"; exit 0
+            fi
+            sleep 10
+          done
+          echo "Timeout waiting for healthy targets"; exit 1
+
+      - name: Switch ALB default to TG-Green
+        run: |
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names "${ALB_NAME}" --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" --query 'Listeners[?Port==`80`]|[0].ListenerArn' --output text)
+          aws elbv2 modify-listener --listener-arn "$LISTENER_ARN" \
+            --default-actions Type=forward,TargetGroupArn="$TG_GREEN_ARN"
+
+      - name: Summary
+        run: echo "Deployed ${GITHUB_SHA::7} to GREEN via LT ${NEW_VER} and flipped ALB."
