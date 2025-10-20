@@ -45,6 +45,10 @@ def health():
     return Response('{"status": "ok"}', mimetype='application/json'), 200
 # --------------------------------------------
 
+@app.route('/green')
+def green():
+    return "Green environment active! Hello from CI/CD Pipeline!", 200
+
 
 if __name__ == '__main__':
     # Running on port 8000 as per Level 1 setup
