@@ -1,70 +1,55 @@
-import os
-from flask import Flask, render_template, request, redirect, url_for
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from flask import Flask, Response
+from prometheus_client import generate_latest, Counter, Histogram
+import time
 
 app = Flask(__name__)
 
-# --- Version / Environment labels (shown in UI) ---
-APP_VERSION = os.getenv("APP_VERSION", "v1.0.0")
-GIT_SHA = os.getenv("GIT_SHA", "local-dev")
-ENV_NAME = os.getenv("ENV_NAME", "dev")
-
-# --- Simple in-memory notes (demo only) ---
-NOTES = []
-
-# --- Prometheus metrics ---
-REQUESTS = Counter(
-    "http_requests_total",
-    "Total HTTP requests",
-    ["method", "endpoint", "status"]
+# --- Prometheus Metrics Setup ---
+# A Counter to count the total number of requests
+REQUEST_COUNT = Counter(
+    'http_requests_total', 'Total HTTP Requests',
+    ['method', 'endpoint', 'http_status']
 )
 
-def count_request(endpoint, status="200"):
-    REQUESTS.labels(method=request.method, endpoint=endpoint, status=status).inc()
+# A Histogram to measure request latency
+REQUEST_LATENCY = Histogram(
+    'http_request_duration_seconds', 'HTTP Request Latency',
+    ['method', 'endpoint']
+)
+# --------------------------------
 
-@app.route("/")
-def home():
-    count_request("/")
-    return render_template("home.html",
-                           version=APP_VERSION, sha=GIT_SHA, env=ENV_NAME)
+@app.route('/')
+def hello_world():
+    # Simulate some work time for latency measurement
+    start_time = time.time()
+    
+    # Core app logic
+    response_text = "Hello, CI/CD Pipeline! Your app is auto-deployed from GitHub Actions"
+    
+    # --- Metrics Collection ---
+    REQUEST_COUNT.labels('GET', '/', 200).inc()
+    REQUEST_LATENCY.labels('GET', '/').observe(time.time() - start_time)
+    # --------------------------
+    
+    return response_text
 
-@app.route("/about")
-def about():
-    count_request("/about")
-    return render_template("about.html",
-                           version=APP_VERSION, sha=GIT_SHA, env=ENV_NAME)
-
-@app.route("/releases")
-def releases():
-    count_request("/releases")
-    # Example static release notes
-    data = [
-        {"version": "v1.0.0", "desc": "Initial multi-page app"},
-        {"version": "v1.1.0", "desc": "Added Prometheus and notes feature"},
-    ]
-    return render_template("releases.html", releases=data,
-                           version=APP_VERSION, sha=GIT_SHA, env=ENV_NAME)
-
-@app.route("/notes", methods=["GET", "POST"])
-def notes():
-    if request.method == "POST":
-        text = request.form.get("text", "").strip()
-        if text:
-            NOTES.append(text)
-    count_request("/notes")
-    return render_template("notes.html", notes=NOTES,
-                           version=APP_VERSION, sha=GIT_SHA, env=ENV_NAME)
-
-@app.route("/health")
-def health():
-    # ALB health check
-    return {"status": "ok"}, 200
-
-@app.route("/metrics")
+# New route for Prometheus to scrape
+@app.route('/metrics')
 def metrics():
-    # Prometheus scrape endpoint
-    return generate_latest(), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+    # Return the metrics data
+    return Response(generate_latest(), mimetype='text/plain')
 
-if __name__ == "__main__":
-    # Local run (CI/CD uses gunicorn)
-    app.run(host="0.0.0.0", port=8000)
+# --- Health check route for Load Balancer ---
+@app.route('/health')
+def health():
+    return Response('{"status": "ok"}', mimetype='application/json'), 200
+# --------------------------------------------
+
+@app.route('/green')
+def green():
+    return "Green environment active! Hello from CI/CD Pipeline!", 200
+
+
+if __name__ == '__main__':
+    # Running on port 8000 as per Level 1 setup
+    app.run(host='0.0.0.0', port=8000)
