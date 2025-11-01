@@ -1,9 +1,25 @@
 {% extends "_base.html" %}
+{% set title = "Releases · CI/CD Demo" %}
 {% block content %}
-  <h2>Releases</h2>
-  <ul>
+
+<section class="section card">
+  <h1 class="h1">Releases</h1>
+  <p class="muted">Each item represents a build shipped by CI/CD.</p>
+</section>
+
+<section class="section card">
+  <div class="timeline">
     {% for r in releases %}
-      <li><b>{{ r.version }}</b> — {{ r.desc }}</li>
+      <div class="t-item">
+        <div class="h2" style="margin:0 0 4px 0;">{{ r.version }}</div>
+        <div class="muted">{{ r.desc }}</div>
+      </div>
+    {% else %}
+      <div class="t-item">
+        <div class="muted">No releases yet. Push a change to trigger a deployment.</div>
+      </div>
     {% endfor %}
-  </ul>
+  </div>
+</section>
+
 {% endblock %}

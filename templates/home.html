@@ -1,5 +1,28 @@
 {% extends "_base.html" %}
+{% set title = "Home · CI/CD Demo" %}
 {% block content %}
-  <h2>Welcome</h2>
-  <p>Your app is now a real multi-page site deployed via CI/CD.</p>
+
+<section class="section card">
+  <h1 class="h1">Welcome 👋</h1>
+  <p class="muted">This app is deployed through a modern CI/CD pipeline. Each push builds, tests, and ships automatically. Use the pages below to explore the demo.</p>
+</section>
+
+<section class="section" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px,1fr)); gap:16px;">
+  <div class="card">
+    <h2 class="h2">Releases</h2>
+    <p class="muted">Track what’s changed across versions. Great for demos and changelogs.</p>
+    <a class="btn secondary" href="{{ url_for('releases') }}">View releases</a>
+  </div>
+  <div class="card">
+    <h2 class="h2">Notes</h2>
+    <p class="muted">Leave a quick note to verify form posts and state.</p>
+    <a class="btn secondary" href="{{ url_for('notes') }}">Add a note</a>
+  </div>
+  <div class="card">
+    <h2 class="h2">Metrics</h2>
+    <p class="muted">Open Prometheus/Grafana metrics to observe your service.</p>
+    <a class="btn secondary" href="/metrics" target="_blank" rel="noopener">Open metrics</a>
+  </div>
+</section>
+
 {% endblock %}

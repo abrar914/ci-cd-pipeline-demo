@@ -1,5 +1,21 @@
 {% extends "_base.html" %}
+{% set title = "About · CI/CD Demo" %}
 {% block content %}
-  <h2>About</h2>
-  <p>Flask + GitHub Actions + AWS (ALB/ASG) with Prometheus & Grafana.</p>
+
+<section class="section card">
+  <h1 class="h1">About</h1>
+  <p>This demo showcases a simple Flask app shipped via GitHub Actions to AWS (ALB/ASG) and observed with Prometheus &amp; Grafana. It’s intentionally minimal so you can focus on pipeline behavior instead of app complexity.</p>
+
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-top:12px;">
+    <div class="card" style="border-style:dashed;">
+      <h2 class="h2">Stack</h2>
+      <p class="muted">Flask · Gunicorn · Nginx/ALB · ASG · GitHub Actions · Prometheus · Grafana</p>
+    </div>
+    <div class="card" style="border-style:dashed;">
+      <h2 class="h2">Goals</h2>
+      <p class="muted">Fast, reliable deployments; easy rollbacks; transparent visibility of service health.</p>
+    </div>
+  </div>
+</section>
+
 {% endblock %}

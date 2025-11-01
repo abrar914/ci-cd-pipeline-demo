@@ -1,0 +1,9 @@
+{% extends "_base.html" %}
+{% set title = "Not found · CI/CD Demo" %}
+{% block content %}
+<section class="section card">
+  <h1 class="h1">Page not found</h1>
+  <p class="muted">The page you’re looking for doesn’t exist. Try the main navigation or return home.</p>
+  <a class="btn secondary" href="{{ url_for('home') }}">Go home</a>
+</section>
+{% endblock %}

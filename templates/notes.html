@@ -1,15 +1,67 @@
 {% extends "_base.html" %}
+{% set title = "Notes · CI/CD Demo" %}
 {% block content %}
-  <h2>Notes</h2>
-  <form method="post">
-    <input type="text" name="text" placeholder="Write a note..." />
-    <button type="submit">Add</button>
+
+<section class="section card">
+  <h1 class="h1">Notes</h1>
+
+  <!-- Flash messages -->
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+  {% if msgs %}
+    <div class="section" style="margin-top:8px;">
+      {% for cat, msg in msgs %}
+      <div
+        class="card"
+        style="border-left:4px solid {{ '#16a34a' if cat=='success' else '#ca8a04' if cat=='warning' else '#b91c1c' }};"
+      >
+        {{ msg }}
+      </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+  {% endwith %}
+
+  <!-- Add -->
+  <form method="post" class="row" style="margin-top:8px;">
+    <input class="input" type="text" name="text" placeholder="Write a note…" required>
+    <button class="btn" type="submit" {% if READ_ONLY %}disabled title="Read-only mode"{% endif %}>Add note</button>
   </form>
-  <ul>
-    {% for n in notes %}
-      <li>{{ n }}</li>
-    {% else %}
-      <li>No notes yet.</li>
-    {% endfor %}
-  </ul>
+
+  <!-- Search + Export -->
+  <form method="get" class="row" style="margin-top:8px;">
+    <input class="input" type="text" name="q" value="{{ q or '' }}" placeholder="Search notes…">
+    <button class="btn secondary" type="submit">Search</button>
+    <a class="btn secondary" href="{{ url_for('notes') }}">Clear</a>
+    <div class="spacer"></div>
+    <a class="btn secondary" href="{{ url_for('export_json') }}">Export JSON</a>
+    <a class="btn secondary" href="{{ url_for('export_csv') }}">Export CSV</a>
+  </form>
+</section>
+
+<section class="section card">
+  <h2 class="h2" style="margin-bottom:6px;">Your notes</h2>
+
+  {% if notes and notes|length > 0 %}
+    <ul class="clean">
+      {% for n in notes %}
+      <li class="item">
+        <div style="flex:1">
+          <div>{{ n.text }}</div>
+          <div class="muted" style="font-size:12px; margin-top:2px;">
+            {{ (n.ts | int) | datetime }} UTC
+          </div>
+        </div>
+        <form method="post" action="{{ url_for('delete_note', index=loop.index0) }}">
+          <button class="btn secondary" type="submit" {% if READ_ONLY %}disabled title="Read-only mode"{% endif %}>Delete</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="item" style="border:none;">
+      <div style="flex:1" class="muted">No notes yet. Add your first note above.</div>
+    </div>
+  {% endif %}
+</section>
+
 {% endblock %}
